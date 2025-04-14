@@ -1,0 +1,1395 @@
+{
+	"$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+	"contentVersion": "1.0.0.0",
+	"parameters": {
+		"factoryName": {
+			"type": "string",
+			"metadata": "Data Factory name",
+			"defaultValue": "hrcm-adf-dev"
+		},
+		"hrcm_adb_ls_properties_typeProperties_existingClusterId": {
+			"type": "string",
+			"defaultValue": "0402-215124-ythq6t4d"
+		},
+		"hrcm_adls_ls_properties_typeProperties_url": {
+			"type": "string",
+			"defaultValue": "https://hrcmadlsdev.dfs.core.windows.net/"
+		},
+		"hrcm_kv_ls_properties_typeProperties_baseUrl": {
+			"type": "string",
+			"defaultValue": "https://hrcm-keyv.vault.azure.net/"
+		},
+		"hrcm_sql_ls_properties_typeProperties_server": {
+			"type": "string",
+			"defaultValue": "hrcmsql.database.windows.net"
+		},
+		"hrcm_sql_ls_properties_typeProperties_database": {
+			"type": "string",
+			"defaultValue": "@{linkedService().db_name}"
+		},
+		"hrcm_sql_ls_properties_typeProperties_userName": {
+			"type": "string",
+			"defaultValue": "hrcmsqldb"
+		}
+	},
+	"variables": {
+		"factoryId": "[concat('Microsoft.DataFactory/factories/', parameters('factoryName'))]"
+	},
+	"resources": [
+		{
+			"name": "[concat(parameters('factoryName'), '/pl_emr_copy')]",
+			"type": "Microsoft.DataFactory/factories/pipelines",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"activities": [
+					{
+						"name": "If full or incremental",
+						"type": "IfCondition",
+						"dependsOn": [],
+						"userProperties": [],
+						"typeProperties": {
+							"expression": {
+								"value": "@equals(pipeline().parameters.loadtype, 'Full')",
+								"type": "Expression"
+							},
+							"ifFalseActivities": [
+								{
+									"name": "Fetch Logs",
+									"type": "Lookup",
+									"dependsOn": [],
+									"policy": {
+										"timeout": "0.12:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"source": {
+											"type": "AzureDatabricksDeltaLakeSource",
+											"query": {
+												"value": "@concat('select coalesce(cast(max(loaddate) as date),''','1900-01-01',''') as last_fetched_date from audit.load_logs where',' data_source=''',pipeline().parameters.datasource,''' and tablename=''',pipeline().parameters.tablename,'''')",
+												"type": "Expression"
+											}
+										},
+										"dataset": {
+											"referenceName": "hrcm_dl_ds",
+											"type": "DatasetReference",
+											"parameters": {
+												"schema_name": "'aa'",
+												"table_name": "'aa'"
+											}
+										}
+									}
+								},
+								{
+									"name": "Incremental Data Load",
+									"type": "Copy",
+									"dependsOn": [
+										{
+											"activity": "Fetch Logs",
+											"dependencyConditions": [
+												"Completed"
+											]
+										}
+									],
+									"policy": {
+										"timeout": "0.12:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"source": {
+											"type": "AzureSqlSource",
+											"sqlReaderQuery": {
+												"value": "@concat('select *,''',pipeline().parameters.database,''' as datasource from ',pipeline().parameters.tablename,' where ',pipeline().parameters.watermark,' >= ''',activity('Fetch Logs').output.firstRow.last_fetched_date,'''')",
+												"type": "Expression"
+											},
+											"queryTimeout": "02:00:00",
+											"partitionOption": "None"
+										},
+										"sink": {
+											"type": "ParquetSink",
+											"storeSettings": {
+												"type": "AzureBlobFSWriteSettings"
+											},
+											"formatSettings": {
+												"type": "ParquetWriteSettings"
+											}
+										},
+										"enableStaging": false,
+										"translator": {
+											"type": "TabularTranslator",
+											"typeConversion": true,
+											"typeConversionSettings": {
+												"allowDataTruncation": true,
+												"treatBooleanAsNumber": false
+											}
+										}
+									},
+									"inputs": [
+										{
+											"referenceName": "hrcm_sql_ds",
+											"type": "DatasetReference",
+											"parameters": {
+												"db_name": {
+													"value": "@pipeline().parameters.database",
+													"type": "Expression"
+												},
+												"schema_name": {
+													"value": "@split(pipeline().parameters.tablename,'.')[0]",
+													"type": "Expression"
+												},
+												"table_name": {
+													"value": "@split(pipeline().parameters.tablename,'.')[1]",
+													"type": "Expression"
+												}
+											}
+										}
+									],
+									"outputs": [
+										{
+											"referenceName": "hrcm_adls_parquet_ds",
+											"type": "DatasetReference",
+											"parameters": {
+												"container": "bronze",
+												"file_path": {
+													"value": "@pipeline().parameters.targetpath",
+													"type": "Expression"
+												},
+												"file_name": {
+													"value": "@split(pipeline().parameters.tablename,'.')[1]",
+													"type": "Expression"
+												}
+											}
+										}
+									]
+								},
+								{
+									"name": "Insert Logs Incremental Load",
+									"type": "Lookup",
+									"dependsOn": [
+										{
+											"activity": "Incremental Data Load",
+											"dependencyConditions": [
+												"Completed"
+											]
+										}
+									],
+									"policy": {
+										"timeout": "0.12:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"source": {
+											"type": "AzureDatabricksDeltaLakeSource",
+											"query": {
+												"value": "@concat('insert into audit.load_logs(data_source,tablename,numberofrowscopied,watermarkcolumnname,loaddate) values (''',pipeline().parameters.datasource,''', ''',pipeline().parameters.tablename,''',''',activity('Incremental Data Load').output.rowscopied,''',''',pipeline().parameters.watermark,''',''',utcNow(),''')')",
+												"type": "Expression"
+											}
+										},
+										"dataset": {
+											"referenceName": "hrcm_dl_ds",
+											"type": "DatasetReference",
+											"parameters": {
+												"schema_name": "'aa'",
+												"table_name": "'aa'"
+											}
+										}
+									}
+								}
+							],
+							"ifTrueActivities": [
+								{
+									"name": "Full Load CP",
+									"type": "Copy",
+									"dependsOn": [],
+									"policy": {
+										"timeout": "0.12:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"source": {
+											"type": "AzureSqlSource",
+											"sqlReaderQuery": {
+												"value": "@concat('select *,''',pipeline().parameters.datasource,'''as datasource from ',pipeline().parameters.tablename)",
+												"type": "Expression"
+											},
+											"queryTimeout": "02:00:00",
+											"partitionOption": "None"
+										},
+										"sink": {
+											"type": "ParquetSink",
+											"storeSettings": {
+												"type": "AzureBlobFSWriteSettings"
+											},
+											"formatSettings": {
+												"type": "ParquetWriteSettings"
+											}
+										},
+										"enableStaging": false,
+										"translator": {
+											"type": "TabularTranslator",
+											"typeConversion": true,
+											"typeConversionSettings": {
+												"allowDataTruncation": true,
+												"treatBooleanAsNumber": false
+											}
+										}
+									},
+									"inputs": [
+										{
+											"referenceName": "hrcm_sql_ds",
+											"type": "DatasetReference",
+											"parameters": {
+												"db_name": {
+													"value": "@pipeline().parameters.database",
+													"type": "Expression"
+												},
+												"schema_name": {
+													"value": "@split(pipeline().parameters.tablename, '.')[0]",
+													"type": "Expression"
+												},
+												"table_name": {
+													"value": "@split(pipeline().parameters.tablename, '.')[1]",
+													"type": "Expression"
+												}
+											}
+										}
+									],
+									"outputs": [
+										{
+											"referenceName": "hrcm_adls_parquet_ds",
+											"type": "DatasetReference",
+											"parameters": {
+												"container": "bronze",
+												"file_path": {
+													"value": "@pipeline().parameters.targetpath",
+													"type": "Expression"
+												},
+												"file_name": {
+													"value": "@split(pipeline().parameters.tablename,'.' )[1]",
+													"type": "Expression"
+												}
+											}
+										}
+									]
+								},
+								{
+									"name": "Insert Data Logs",
+									"type": "Lookup",
+									"dependsOn": [
+										{
+											"activity": "Full Load CP",
+											"dependencyConditions": [
+												"Succeeded"
+											]
+										}
+									],
+									"policy": {
+										"timeout": "0.12:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"source": {
+											"type": "AzureDatabricksDeltaLakeSource",
+											"query": {
+												"value": "@concat('insert into audit.load_logs(data_source,tablename,numberofrowscopied,watermarkcolumnname,loaddate) values (''',pipeline().parameters.datasource,''', ''',pipeline().parameters.tablename,''',''',activity('Full Load CP').output.rowscopied,''',''',pipeline().parameters.watermark,''',''',utcNow(),''')')",
+												"type": "Expression"
+											}
+										},
+										"dataset": {
+											"referenceName": "hrcm_dl_ds",
+											"type": "DatasetReference",
+											"parameters": {
+												"schema_name": "'aa'",
+												"table_name": "'aa'"
+											}
+										}
+									}
+								}
+							]
+						}
+					}
+				],
+				"policy": {
+					"elapsedTimeMetric": {}
+				},
+				"parameters": {
+					"database": {
+						"type": "string"
+					},
+					"datasource": {
+						"type": "string"
+					},
+					"tablename": {
+						"type": "string"
+					},
+					"loadtype": {
+						"type": "string"
+					},
+					"watermark": {
+						"type": "string"
+					},
+					"is_active": {
+						"type": "string"
+					},
+					"targetpath": {
+						"type": "string"
+					}
+				},
+				"annotations": [],
+				"lastPublishTime": "2025-04-06T01:19:06Z"
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/datasets/hrcm_dl_ds')]",
+				"[concat(variables('factoryId'), '/datasets/hrcm_sql_ds')]",
+				"[concat(variables('factoryId'), '/datasets/hrcm_adls_parquet_ds')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/pl_emr_src_to_landing')]",
+			"type": "Microsoft.DataFactory/factories/pipelines",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"activities": [
+					{
+						"name": "Lookup_config_file",
+						"type": "Lookup",
+						"dependsOn": [],
+						"policy": {
+							"timeout": "0.12:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"source": {
+								"type": "DelimitedTextSource",
+								"storeSettings": {
+									"type": "AzureBlobFSReadSettings",
+									"recursive": true,
+									"enablePartitionDiscovery": false
+								},
+								"formatSettings": {
+									"type": "DelimitedTextReadSettings"
+								}
+							},
+							"dataset": {
+								"referenceName": "hrcm_adls_flat_files_ds",
+								"type": "DatasetReference",
+								"parameters": {
+									"container": "configs",
+									"file_path": "emr",
+									"file_name": "load_config.csv"
+								}
+							},
+							"firstRowOnly": false
+						}
+					},
+					{
+						"name": "For Each File",
+						"type": "ForEach",
+						"dependsOn": [
+							{
+								"activity": "Lookup_config_file",
+								"dependencyConditions": [
+									"Completed"
+								]
+							}
+						],
+						"userProperties": [],
+						"typeProperties": {
+							"items": {
+								"value": "@activity('Lookup_config_file').output.value",
+								"type": "Expression"
+							},
+							"isSequential": false,
+							"batchCount": 5,
+							"activities": [
+								{
+									"name": "file_exists",
+									"type": "GetMetadata",
+									"dependsOn": [],
+									"policy": {
+										"timeout": "0.12:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"dataset": {
+											"referenceName": "hrcm_adls_parquet_ds",
+											"type": "DatasetReference",
+											"parameters": {
+												"container": "bronze",
+												"file_path": {
+													"value": "@item().targetpath",
+													"type": "Expression"
+												},
+												"file_name": {
+													"value": "@split(item().tablename,'.')[1] ",
+													"type": "Expression"
+												}
+											}
+										},
+										"fieldList": [
+											"exists"
+										],
+										"storeSettings": {
+											"type": "AzureBlobFSReadSettings",
+											"recursive": true,
+											"enablePartitionDiscovery": false
+										},
+										"formatSettings": {
+											"type": "ParquetReadSettings"
+										}
+									}
+								},
+								{
+									"name": "If_file_exists",
+									"type": "IfCondition",
+									"dependsOn": [
+										{
+											"activity": "file_exists",
+											"dependencyConditions": [
+												"Completed"
+											]
+										}
+									],
+									"userProperties": [],
+									"typeProperties": {
+										"expression": {
+											"value": "@activity('file_exists').output.exists",
+											"type": "Expression"
+										},
+										"ifTrueActivities": [
+											{
+												"name": "Archive data",
+												"type": "Copy",
+												"dependsOn": [],
+												"policy": {
+													"timeout": "0.12:00:00",
+													"retry": 0,
+													"retryIntervalInSeconds": 30,
+													"secureOutput": false,
+													"secureInput": false
+												},
+												"userProperties": [],
+												"typeProperties": {
+													"source": {
+														"type": "ParquetSource",
+														"storeSettings": {
+															"type": "AzureBlobFSReadSettings",
+															"recursive": true,
+															"enablePartitionDiscovery": false
+														},
+														"formatSettings": {
+															"type": "ParquetReadSettings"
+														}
+													},
+													"sink": {
+														"type": "ParquetSink",
+														"storeSettings": {
+															"type": "AzureBlobFSWriteSettings"
+														},
+														"formatSettings": {
+															"type": "ParquetWriteSettings"
+														}
+													},
+													"enableStaging": false,
+													"translator": {
+														"type": "TabularTranslator",
+														"typeConversion": true,
+														"typeConversionSettings": {
+															"allowDataTruncation": true,
+															"treatBooleanAsNumber": false
+														}
+													}
+												},
+												"inputs": [
+													{
+														"referenceName": "hrcm_adls_parquet_ds",
+														"type": "DatasetReference",
+														"parameters": {
+															"container": "bronze",
+															"file_path": {
+																"value": "@item().targetpath",
+																"type": "Expression"
+															},
+															"file_name": {
+																"value": "@split(item().tablename,'.' )[1]",
+																"type": "Expression"
+															}
+														}
+													}
+												],
+												"outputs": [
+													{
+														"referenceName": "hrcm_adls_parquet_ds",
+														"type": "DatasetReference",
+														"parameters": {
+															"container": "bronze",
+															"file_path": {
+																"value": "@concat(item().targetpath,'/archive/',formatDateTime(utcNow(),'yyyy'),'/',formatDateTime(utcNow(),'%M'),'/', formatDateTime(utcNow(), '%d' ) )",
+																"type": "Expression"
+															},
+															"file_name": {
+																"value": "@split(item().tablename,'.')[1]",
+																"type": "Expression"
+															}
+														}
+													}
+												]
+											}
+										]
+									}
+								},
+								{
+									"name": "If_is_active_true",
+									"type": "IfCondition",
+									"dependsOn": [
+										{
+											"activity": "If_file_exists",
+											"dependencyConditions": [
+												"Succeeded"
+											]
+										}
+									],
+									"userProperties": [],
+									"typeProperties": {
+										"expression": {
+											"value": "@equals(item().is_active,'1')",
+											"type": "Expression"
+										},
+										"ifTrueActivities": [
+											{
+												"name": "Execute Pipeline",
+												"type": "ExecutePipeline",
+												"dependsOn": [],
+												"policy": {
+													"secureInput": false
+												},
+												"userProperties": [],
+												"typeProperties": {
+													"pipeline": {
+														"referenceName": "pl_emr_copy",
+														"type": "PipelineReference"
+													},
+													"waitOnCompletion": true,
+													"parameters": {
+														"database": {
+															"value": "@item().database",
+															"type": "Expression"
+														},
+														"datasource": {
+															"value": "@item().datasource",
+															"type": "Expression"
+														},
+														"tablename": {
+															"value": "@item().tablename",
+															"type": "Expression"
+														},
+														"loadtype": {
+															"value": "@item().loadtype",
+															"type": "Expression"
+														},
+														"watermark": {
+															"value": "@item().watermark",
+															"type": "Expression"
+														},
+														"is_active": {
+															"value": "@item().is_active",
+															"type": "Expression"
+														},
+														"targetpath": {
+															"value": "@item().targetpath",
+															"type": "Expression"
+														}
+													}
+												}
+											}
+										]
+									}
+								}
+							]
+						}
+					}
+				],
+				"policy": {
+					"elapsedTimeMetric": {}
+				},
+				"annotations": [],
+				"lastPublishTime": "2025-04-14T01:40:10Z"
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/datasets/hrcm_adls_flat_files_ds')]",
+				"[concat(variables('factoryId'), '/datasets/hrcm_adls_parquet_ds')]",
+				"[concat(variables('factoryId'), '/pipelines/pl_emr_copy')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/pl_main')]",
+			"type": "Microsoft.DataFactory/factories/pipelines",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"activities": [
+					{
+						"name": "execute_pl_emr_src_to_landing",
+						"type": "ExecutePipeline",
+						"dependsOn": [],
+						"policy": {
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"pipeline": {
+								"referenceName": "pl_emr_src_to_landing",
+								"type": "PipelineReference"
+							},
+							"waitOnCompletion": true,
+							"parameters": {}
+						}
+					},
+					{
+						"name": "execute_pl_silver_gold",
+						"type": "ExecutePipeline",
+						"dependsOn": [
+							{
+								"activity": "execute_pl_emr_src_to_landing",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"pipeline": {
+								"referenceName": "pl_silver_gold",
+								"type": "PipelineReference"
+							},
+							"waitOnCompletion": true,
+							"parameters": {}
+						}
+					}
+				],
+				"policy": {
+					"elapsedTimeMetric": {}
+				},
+				"annotations": [],
+				"lastPublishTime": "2025-04-13T23:25:35Z"
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/pipelines/pl_emr_src_to_landing')]",
+				"[concat(variables('factoryId'), '/pipelines/pl_silver_gold')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/pl_silver_gold')]",
+			"type": "Microsoft.DataFactory/factories/pipelines",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"activities": [
+					{
+						"name": "silver_icd_codes",
+						"type": "DatabricksNotebook",
+						"dependsOn": [],
+						"policy": {
+							"timeout": "0.12:00:00",
+							"retry": 2,
+							"retryIntervalInSeconds": 60,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"notebookPath": "/Users/sxb230101@utdallas.edu/4. Silver/ICD codes"
+						},
+						"linkedServiceName": {
+							"referenceName": "hrcm_adb_ls",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "gold_icd_codes",
+						"type": "DatabricksNotebook",
+						"dependsOn": [
+							{
+								"activity": "silver_icd_codes",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"timeout": "0.12:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"notebookPath": "/Users/sxb230101@utdallas.edu/5. Gold/dim_icd_code"
+						},
+						"linkedServiceName": {
+							"referenceName": "hrcm_adb_ls",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "silver_npi",
+						"type": "DatabricksNotebook",
+						"dependsOn": [],
+						"policy": {
+							"timeout": "0.12:00:00",
+							"retry": 2,
+							"retryIntervalInSeconds": 60,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"notebookPath": "/Users/sxb230101@utdallas.edu/4. Silver/NPI"
+						},
+						"linkedServiceName": {
+							"referenceName": "hrcm_adb_ls",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "gold_npi",
+						"type": "DatabricksNotebook",
+						"dependsOn": [
+							{
+								"activity": "silver_npi",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"timeout": "0.12:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"notebookPath": "/Users/sxb230101@utdallas.edu/5. Gold/dim_npi"
+						},
+						"linkedServiceName": {
+							"referenceName": "hrcm_adb_ls",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "gold_patient",
+						"type": "DatabricksNotebook",
+						"dependsOn": [
+							{
+								"activity": "silver_patient",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"timeout": "0.12:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"notebookPath": "/Users/sxb230101@utdallas.edu/5. Gold/dim_patient"
+						},
+						"linkedServiceName": {
+							"referenceName": "hrcm_adb_ls",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "silver_cpt_codes",
+						"type": "DatabricksNotebook",
+						"dependsOn": [
+							{
+								"activity": "cpt_codes_to bronze",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"timeout": "0.12:00:00",
+							"retry": 2,
+							"retryIntervalInSeconds": 60,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"notebookPath": "/Users/sxb230101@utdallas.edu/4. Silver/cpt_codes"
+						},
+						"linkedServiceName": {
+							"referenceName": "hrcm_adb_ls",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "gold_cpt_codes",
+						"type": "DatabricksNotebook",
+						"dependsOn": [
+							{
+								"activity": "silver_cpt_codes",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"timeout": "0.12:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"notebookPath": "/Users/sxb230101@utdallas.edu/5. Gold/dim_cpt_code"
+						},
+						"linkedServiceName": {
+							"referenceName": "hrcm_adb_ls",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "silver_departments",
+						"type": "DatabricksNotebook",
+						"dependsOn": [],
+						"policy": {
+							"timeout": "0.12:00:00",
+							"retry": 2,
+							"retryIntervalInSeconds": 60,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"notebookPath": "/Users/sxb230101@utdallas.edu/4. Silver/departments"
+						},
+						"linkedServiceName": {
+							"referenceName": "hrcm_adb_ls",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "gold_departments",
+						"type": "DatabricksNotebook",
+						"dependsOn": [
+							{
+								"activity": "silver_departments",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"timeout": "0.12:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"notebookPath": "/Users/sxb230101@utdallas.edu/5. Gold/dim_department"
+						},
+						"linkedServiceName": {
+							"referenceName": "hrcm_adb_ls",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "silver_providers",
+						"type": "DatabricksNotebook",
+						"dependsOn": [],
+						"policy": {
+							"timeout": "0.12:00:00",
+							"retry": 2,
+							"retryIntervalInSeconds": 60,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"notebookPath": "/Users/sxb230101@utdallas.edu/4. Silver/providers"
+						},
+						"linkedServiceName": {
+							"referenceName": "hrcm_adb_ls",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "gold_providers",
+						"type": "DatabricksNotebook",
+						"dependsOn": [
+							{
+								"activity": "silver_providers",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"timeout": "0.12:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"notebookPath": "/Users/sxb230101@utdallas.edu/5. Gold/dim_provider"
+						},
+						"linkedServiceName": {
+							"referenceName": "hrcm_adb_ls",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "silver_transactions",
+						"type": "DatabricksNotebook",
+						"dependsOn": [],
+						"policy": {
+							"timeout": "0.12:00:00",
+							"retry": 2,
+							"retryIntervalInSeconds": 60,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"notebookPath": "/Users/sxb230101@utdallas.edu/4. Silver/transactions"
+						},
+						"linkedServiceName": {
+							"referenceName": "hrcm_adb_ls",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "gold_transactions",
+						"type": "DatabricksNotebook",
+						"dependsOn": [
+							{
+								"activity": "silver_transactions",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"timeout": "0.12:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"notebookPath": "/Users/sxb230101@utdallas.edu/5. Gold/fact_transaction"
+						},
+						"linkedServiceName": {
+							"referenceName": "hrcm_adb_ls",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "claims_to_bronze",
+						"type": "DatabricksNotebook",
+						"dependsOn": [],
+						"policy": {
+							"timeout": "0.12:00:00",
+							"retry": 2,
+							"retryIntervalInSeconds": 60,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"notebookPath": "/Users/sxb230101@utdallas.edu/3. Bronze/claims_data_to_bronze"
+						},
+						"linkedServiceName": {
+							"referenceName": "hrcm_adb_ls",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "cpt_codes_to bronze",
+						"type": "DatabricksNotebook",
+						"dependsOn": [],
+						"policy": {
+							"timeout": "0.12:00:00",
+							"retry": 2,
+							"retryIntervalInSeconds": 60,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"notebookPath": "/Users/sxb230101@utdallas.edu/3. Bronze/cpt_codes_data_to_bronze"
+						},
+						"linkedServiceName": {
+							"referenceName": "hrcm_adb_ls",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "silver_patient",
+						"type": "DatabricksNotebook",
+						"dependsOn": [],
+						"policy": {
+							"timeout": "0.12:00:00",
+							"retry": 2,
+							"retryIntervalInSeconds": 60,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"notebookPath": "/Users/sxb230101@utdallas.edu/4. Silver/Patient"
+						},
+						"linkedServiceName": {
+							"referenceName": "hrcm_adb_ls",
+							"type": "LinkedServiceReference"
+						}
+					}
+				],
+				"policy": {
+					"elapsedTimeMetric": {}
+				},
+				"annotations": [],
+				"lastPublishTime": "2025-04-14T00:40:18Z"
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/linkedServices/hrcm_adb_ls')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/hrcm_adls_flat_files_ds')]",
+			"type": "Microsoft.DataFactory/factories/datasets",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"linkedServiceName": {
+					"referenceName": "hrcm_adls_ls",
+					"type": "LinkedServiceReference"
+				},
+				"parameters": {
+					"container": {
+						"type": "string"
+					},
+					"file_path": {
+						"type": "string"
+					},
+					"file_name": {
+						"type": "string"
+					}
+				},
+				"annotations": [],
+				"type": "DelimitedText",
+				"typeProperties": {
+					"location": {
+						"type": "AzureBlobFSLocation",
+						"fileName": {
+							"value": "@dataset().file_name",
+							"type": "Expression"
+						},
+						"folderPath": {
+							"value": "@dataset().file_path",
+							"type": "Expression"
+						},
+						"fileSystem": {
+							"value": "@dataset().container",
+							"type": "Expression"
+						}
+					},
+					"columnDelimiter": ",",
+					"escapeChar": "\\",
+					"firstRowAsHeader": true,
+					"quoteChar": "\""
+				},
+				"schema": []
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/linkedServices/hrcm_adls_ls')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/hrcm_adls_parquet_ds')]",
+			"type": "Microsoft.DataFactory/factories/datasets",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"linkedServiceName": {
+					"referenceName": "hrcm_adls_ls",
+					"type": "LinkedServiceReference"
+				},
+				"parameters": {
+					"container": {
+						"type": "string"
+					},
+					"file_path": {
+						"type": "string"
+					},
+					"file_name": {
+						"type": "string"
+					}
+				},
+				"annotations": [],
+				"type": "Parquet",
+				"typeProperties": {
+					"location": {
+						"type": "AzureBlobFSLocation",
+						"fileName": {
+							"value": "@dataset().file_name",
+							"type": "Expression"
+						},
+						"folderPath": {
+							"value": "@dataset().file_path",
+							"type": "Expression"
+						},
+						"fileSystem": {
+							"value": "@dataset().container",
+							"type": "Expression"
+						}
+					},
+					"compressionCodec": "snappy"
+				},
+				"schema": []
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/linkedServices/hrcm_adls_ls')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/hrcm_dl_ds')]",
+			"type": "Microsoft.DataFactory/factories/datasets",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"linkedServiceName": {
+					"referenceName": "hrcm_dl_ls",
+					"type": "LinkedServiceReference"
+				},
+				"parameters": {
+					"schema_name": {
+						"type": "string"
+					},
+					"table_name": {
+						"type": "string"
+					}
+				},
+				"annotations": [],
+				"type": "AzureDatabricksDeltaLakeDataset",
+				"typeProperties": {
+					"database": {
+						"value": "@dataset().schema_name",
+						"type": "Expression"
+					},
+					"table": {
+						"value": "@dataset().table_name",
+						"type": "Expression"
+					}
+				},
+				"schema": []
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/linkedServices/hrcm_dl_ls')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/hrcm_sql_ds')]",
+			"type": "Microsoft.DataFactory/factories/datasets",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"linkedServiceName": {
+					"referenceName": "hrcm_sql_ls",
+					"type": "LinkedServiceReference",
+					"parameters": {
+						"db_name": {
+							"value": "@dataset().db_name",
+							"type": "Expression"
+						}
+					}
+				},
+				"parameters": {
+					"db_name": {
+						"type": "string"
+					},
+					"schema_name": {
+						"type": "string"
+					},
+					"table_name": {
+						"type": "string"
+					}
+				},
+				"annotations": [],
+				"type": "AzureSqlTable",
+				"schema": [],
+				"typeProperties": {
+					"schema": {
+						"value": "@dataset().schema_name",
+						"type": "Expression"
+					},
+					"table": {
+						"value": "@dataset().table_name",
+						"type": "Expression"
+					}
+				}
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/linkedServices/hrcm_sql_ls')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/hrcm_adb_ls')]",
+			"type": "Microsoft.DataFactory/factories/linkedServices",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"annotations": [],
+				"type": "AzureDatabricks",
+				"typeProperties": {
+					"domain": "https://adb-1178076783282507.7.azuredatabricks.net",
+					"accessToken": {
+						"type": "AzureKeyVaultSecret",
+						"store": {
+							"referenceName": "hrcm_kv_ls",
+							"type": "LinkedServiceReference"
+						},
+						"secretName": "adf-access-token"
+					},
+					"existingClusterId": "[parameters('hrcm_adb_ls_properties_typeProperties_existingClusterId')]"
+				}
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/linkedServices/hrcm_kv_ls')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/hrcm_adls_ls')]",
+			"type": "Microsoft.DataFactory/factories/linkedServices",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"annotations": [],
+				"type": "AzureBlobFS",
+				"typeProperties": {
+					"url": "[parameters('hrcm_adls_ls_properties_typeProperties_url')]",
+					"accountKey": {
+						"type": "AzureKeyVaultSecret",
+						"store": {
+							"referenceName": "hrcm_kv_ls",
+							"type": "LinkedServiceReference"
+						},
+						"secretName": "adls-access-keys"
+					}
+				}
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/linkedServices/hrcm_kv_ls')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/hrcm_dl_ls')]",
+			"type": "Microsoft.DataFactory/factories/linkedServices",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"annotations": [],
+				"type": "AzureDatabricksDeltaLake",
+				"typeProperties": {
+					"domain": "https://adb-1178076783282507.7.azuredatabricks.net",
+					"clusterId": "0402-215124-ythq6t4d",
+					"accessToken": {
+						"type": "AzureKeyVaultSecret",
+						"store": {
+							"referenceName": "hrcm_kv_ls",
+							"type": "LinkedServiceReference"
+						},
+						"secretName": "adf-access-token"
+					}
+				}
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/linkedServices/hrcm_kv_ls')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/hrcm_kv_ls')]",
+			"type": "Microsoft.DataFactory/factories/linkedServices",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"annotations": [],
+				"type": "AzureKeyVault",
+				"typeProperties": {
+					"baseUrl": "[parameters('hrcm_kv_ls_properties_typeProperties_baseUrl')]"
+				}
+			},
+			"dependsOn": []
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/hrcm_sql_ls')]",
+			"type": "Microsoft.DataFactory/factories/linkedServices",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"parameters": {
+					"db_name": {
+						"type": "string"
+					}
+				},
+				"annotations": [],
+				"type": "AzureSqlDatabase",
+				"typeProperties": {
+					"server": "[parameters('hrcm_sql_ls_properties_typeProperties_server')]",
+					"database": "[parameters('hrcm_sql_ls_properties_typeProperties_database')]",
+					"encrypt": "mandatory",
+					"trustServerCertificate": false,
+					"authenticationType": "SQL",
+					"userName": "[parameters('hrcm_sql_ls_properties_typeProperties_userName')]",
+					"password": {
+						"type": "AzureKeyVaultSecret",
+						"store": {
+							"referenceName": "hrcm_kv_ls",
+							"type": "LinkedServiceReference"
+						},
+						"secretName": "sql-db-pwd"
+					}
+				}
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/linkedServices/hrcm_kv_ls')]"
+			]
+		}
+	]
+}

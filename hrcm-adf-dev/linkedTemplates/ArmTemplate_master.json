@@ -1,0 +1,84 @@
+{
+	"$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+	"contentVersion": "1.0.0.0",
+	"parameters": {
+		"factoryName": {
+			"type": "string",
+			"metadata": "Data Factory name",
+			"defaultValue": "hrcm-adf-dev"
+		},
+		"hrcm_adb_ls_properties_typeProperties_existingClusterId": {
+			"type": "string",
+			"defaultValue": "0402-215124-ythq6t4d"
+		},
+		"hrcm_adls_ls_properties_typeProperties_url": {
+			"type": "string",
+			"defaultValue": "https://hrcmadlsdev.dfs.core.windows.net/"
+		},
+		"hrcm_kv_ls_properties_typeProperties_baseUrl": {
+			"type": "string",
+			"defaultValue": "https://hrcm-keyv.vault.azure.net/"
+		},
+		"hrcm_sql_ls_properties_typeProperties_server": {
+			"type": "string",
+			"defaultValue": "hrcmsql.database.windows.net"
+		},
+		"hrcm_sql_ls_properties_typeProperties_database": {
+			"type": "string",
+			"defaultValue": "@{linkedService().db_name}"
+		},
+		"hrcm_sql_ls_properties_typeProperties_userName": {
+			"type": "string",
+			"defaultValue": "hrcmsqldb"
+		},
+		"containerUri": {
+			"type": "string",
+			"metadata": "URI to storage account containing linked ARM templates"
+		},
+		"containerSasToken": {
+			"type": "string",
+			"metadata": "Sas token to storage account containing linked ARM templates"
+		}
+	},
+	"variables": {
+		"factoryId": "[concat('Microsoft.DataFactory/factories/', parameters('factoryName'))]"
+	},
+	"resources": [
+		{
+			"name": "hrcm-adf-dev_ArmTemplate_0",
+			"type": "Microsoft.Resources/deployments",
+			"apiVersion": "2024-03-01",
+			"properties": {
+				"mode": "incremental",
+				"templateLink": {
+					"uri": "[concat(parameters('containerUri'), '/ArmTemplate_0.json', parameters('containerSasToken'))]",
+					"contentVersion": "1.0.0.0"
+				},
+				"parameters": {
+					"factoryName": {
+						"value": "[parameters('factoryName')]"
+					},
+					"hrcm_kv_ls_properties_typeProperties_baseUrl": {
+						"value": "[parameters('hrcm_kv_ls_properties_typeProperties_baseUrl')]"
+					},
+					"hrcm_adb_ls_properties_typeProperties_existingClusterId": {
+						"value": "[parameters('hrcm_adb_ls_properties_typeProperties_existingClusterId')]"
+					},
+					"hrcm_adls_ls_properties_typeProperties_url": {
+						"value": "[parameters('hrcm_adls_ls_properties_typeProperties_url')]"
+					},
+					"hrcm_sql_ls_properties_typeProperties_server": {
+						"value": "[parameters('hrcm_sql_ls_properties_typeProperties_server')]"
+					},
+					"hrcm_sql_ls_properties_typeProperties_database": {
+						"value": "[parameters('hrcm_sql_ls_properties_typeProperties_database')]"
+					},
+					"hrcm_sql_ls_properties_typeProperties_userName": {
+						"value": "[parameters('hrcm_sql_ls_properties_typeProperties_userName')]"
+					}
+				}
+			},
+			"dependsOn": []
+		}
+	]
+}

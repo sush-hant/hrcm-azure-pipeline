@@ -1,0 +1,33 @@
+{
+	"$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentParameters.json#",
+	"contentVersion": "1.0.0.0",
+	"parameters": {
+		"factoryName": {
+			"value": "hrcm-adf-dev"
+		},
+		"hrcm_adb_ls_properties_typeProperties_existingClusterId": {
+			"value": "0402-215124-ythq6t4d"
+		},
+		"hrcm_adls_ls_properties_typeProperties_url": {
+			"value": "https://hrcmadlsdev.dfs.core.windows.net/"
+		},
+		"hrcm_kv_ls_properties_typeProperties_baseUrl": {
+			"value": "https://hrcm-keyv.vault.azure.net/"
+		},
+		"hrcm_sql_ls_properties_typeProperties_server": {
+			"value": "hrcmsql.database.windows.net"
+		},
+		"hrcm_sql_ls_properties_typeProperties_database": {
+			"value": "@{linkedService().db_name}"
+		},
+		"hrcm_sql_ls_properties_typeProperties_userName": {
+			"value": "hrcmsqldb"
+		},
+		"containerUri": {
+			"value": ""
+		},
+		"containerSasToken": {
+			"value": ""
+		}
+	}
+}
