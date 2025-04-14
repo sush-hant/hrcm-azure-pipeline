@@ -9,17 +9,17 @@ The final Gold layer organizes the data into a well-designed star schema with di
 ## Tech Stack
 - **Azure SQL Database (2 sources)** – Source systems containing healthcare revenue and operations data
 
-- **Azure Data Factory (ADF)** – Orchestrates data ingestion from both databases, moves it to ADLS Gen2, and triggers Databricks workflows
+- **Azure Data Factory (ADF)** – Orchestrates data ingestion from both databases, moves it to ADLS Gen2, and triggers Databricks notebooks
 
 - **Azure Data Lake Storage Gen2 (ADLS Gen2)** – Acts as:
 
-  - Landing zone for raw data from both databases
+  - Landing zone for claims and cpt codes data
 
-  - Bronze layer for ingested raw data
+  - Bronze layer for ingested raw data from databases and APIs
 
   - Storage for a central config file (metadata) describing all tables from both databases
 
-- **Azure Databricks (ADB)** – Performs data processing, cleansing, transformation, and modeling using PySpark
+- **Azure Databricks (ADB)** – Performs data processing, cleansing, transformation, and modeling using PySpark and Spark SQL
 
 - **Azure Key Vault** – Secure storage of credentials and secrets
 
@@ -70,7 +70,7 @@ The final Gold layer organizes the data into a well-designed star schema with di
 
     - Raw data is organized in ADLS Gen2 Bronze layer
 
-    - Partial Bronze processing and API ingestion happen in Azure Databricks
+    - Bronze processing and API ingestion happen in Azure Databricks
 
 4. Silver Layer:
 
@@ -89,7 +89,7 @@ The final Gold layer organizes the data into a well-designed star schema with di
 
 6. Security:
 
-    - Azure Key Vault secures credentials and API keys
+    - Azure Key Vault secures credentials and Access keys
 
 7. CI/CD:
 
