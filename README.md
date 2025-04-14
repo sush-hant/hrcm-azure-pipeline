@@ -1,4 +1,4 @@
-# End-to-End Healthcare Revenue Data Pipeline (Azure)
+# End-to-End Healthcare Revenue Data Pipeline 
 ## Overview
 This project implements an end-to-end scalable data engineering pipeline for processing healthcare revenue data using Azure services. The pipeline ingests, processes, and models financial data from healthcare facilities within Azure Databricks, applying a Medallion Architecture (Bronze, Silver, Gold layers) to incrementally refine data quality and structure.
 
