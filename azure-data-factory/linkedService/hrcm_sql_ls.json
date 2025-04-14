@@ -1,0 +1,29 @@
+{
+	"name": "hrcm_sql_ls",
+	"type": "Microsoft.DataFactory/factories/linkedservices",
+	"properties": {
+		"parameters": {
+			"db_name": {
+				"type": "string"
+			}
+		},
+		"annotations": [],
+		"type": "AzureSqlDatabase",
+		"typeProperties": {
+			"server": "hrcmsql.database.windows.net",
+			"database": "@{linkedService().db_name}",
+			"encrypt": "mandatory",
+			"trustServerCertificate": false,
+			"authenticationType": "SQL",
+			"userName": "hrcmsqldb",
+			"password": {
+				"type": "AzureKeyVaultSecret",
+				"store": {
+					"referenceName": "hrcm_kv_ls",
+					"type": "LinkedServiceReference"
+				},
+				"secretName": "sql-db-pwd"
+			}
+		}
+	}
+}

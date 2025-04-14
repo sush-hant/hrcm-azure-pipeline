@@ -1,0 +1,9 @@
+{
+	"name": "hrcm-adf-dev",
+	"location": "westus2",
+	"identity": {
+		"type": "SystemAssigned",
+		"principalId": "acacfb07-d1c1-42c0-aeb7-fd9179047bf1",
+		"tenantId": "8d281d1d-9c4d-4bf7-b16e-032d15de9f6c"
+	}
+}
