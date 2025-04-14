@@ -13,7 +13,7 @@ The final Gold layer organizes the data into a well-designed star schema with di
 
 - **Azure Data Lake Storage Gen2 (ADLS Gen2)** – Acts as:
 
-  - Landing zone for claims and cpt codes data
+  - Landing zone for claims and CPT codes data
 
   - Bronze layer for ingested raw data from databases and APIs
 
